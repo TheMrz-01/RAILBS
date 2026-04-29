@@ -25,6 +25,7 @@
   Localization is based on the competition-provided magnets.
 */
 
+// [WARNING!] NEEDS CONFIG
 // -----------------------------
 // Pin configuration
 // -----------------------------
@@ -94,8 +95,8 @@ static constexpr uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 // Web UI configuration
 // -----------------------------
 
-static constexpr char WIFI_AP_SSID[] = "RailBot-Tune";
-static constexpr char WIFI_AP_PASSWORD[] = "12345678";
+static constexpr char WIFI_AP_SSID[] = "KralVonMobil";
+static constexpr char WIFI_AP_PASSWORD[] = "MustiSuckz";
 
 // -----------------------------
 // Mission state machine
@@ -187,7 +188,7 @@ static void enterState(MissionState nextState) {
 }
 
 static void saveConfig() {
-  preferences.begin("railbot", false);
+  preferences.begin("kral-von-mobil", false);
   preferences.putInt("cruise", config.cruisePwm);
   preferences.putInt("approach", config.approachPwm);
   preferences.putInt("finish", config.finishPwm);
@@ -200,7 +201,7 @@ static void saveConfig() {
 }
 
 static void loadConfig() {
-  preferences.begin("railbot", true);
+  preferences.begin("kral-von-mobil", true);
   config.cruisePwm = preferences.getInt("cruise", config.cruisePwm);
   config.approachPwm = preferences.getInt("approach", config.approachPwm);
   config.finishPwm = preferences.getInt("finish", config.finishPwm);
@@ -297,6 +298,7 @@ static void setupSensors() {
 
   // FALLING is common when KY-024 digital output goes LOW on detection.
   // If your module outputs HIGH on magnet detection, change these to RISING.
+  // [WARNING!] NEEDS CONFIG
   attachInterrupt(digitalPinToInterrupt(FRONT_MAGNET_PIN), onFrontMagnet, FALLING);
   attachInterrupt(digitalPinToInterrupt(REAR_MAGNET_PIN), onRearMagnet, FALLING);
 }
@@ -453,9 +455,9 @@ static String htmlPage() {
   page.reserve(5000);
 
   page += F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
-  page += F("<title>RailBot</title><style>");
+  page += F("<title>KRAL VON 4EVER</title><style>");
   page += F("body{font-family:system-ui;margin:20px;background:#10131a;color:#eef}button,input{font-size:16px;margin:4px;padding:8px}input{width:90px}.card{background:#1b2030;padding:14px;border-radius:12px;margin:12px 0}.danger{background:#b00020;color:white}.ok{background:#1f8f4d;color:white}</style>");
-  page += F("</head><body><h1>RailBot Control</h1>");
+  page += F("</head><body><h1>Kral Von Mobil Control</h1>");
 
   page += F("<div class='card'><button class='ok' onclick=\"fetch('/start')\">Start Mission</button>");
   page += F("<button class='danger' onclick=\"fetch('/stop')\">Emergency Stop</button>");
@@ -567,7 +569,7 @@ static void setupWebUi() {
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
+  delay(2000);
 
   loadConfig();
   setupMotors();
@@ -576,7 +578,7 @@ void setup() {
 
   enterState(MissionState::Idle);
 
-  Serial.println("RailBot firmware ready");
+  Serial.println("Kral Von Mobil firmware ready");
   Serial.print("WiFi AP: ");
   Serial.println(WIFI_AP_SSID);
   Serial.print("Open: http://");
