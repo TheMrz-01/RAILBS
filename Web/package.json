@@ -1,0 +1,11 @@
+{
+  "name": "railbot-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "check": "bun build src/server.ts --outfile /tmp/railbot-dashboard-check.js --target bun"
+  }
+}

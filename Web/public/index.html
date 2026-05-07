@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RailBot Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ESP32 Rail Vehicle</p>
+        <h1>Mission Dashboard</h1>
+        <p class="subtle">Live polling, local logging, CSV downloads, and quick control for testing.</p>
+      </div>
+      <div class="status-pill" id="connection-pill">Disconnected</div>
+    </header>
+
+    <main>
+      <section class="panel controls">
+        <div class="field wide">
+          <label for="esp32-url">ESP32 URL</label>
+          <input id="esp32-url" value="http://192.168.4.1" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="poll-ms">Poll ms</label>
+          <input id="poll-ms" type="number" min="50" max="2000" step="50" value="100">
+        </div>
+        <button id="save-config">Save</button>
+        <button id="toggle-polling">Pause Polling</button>
+        <button class="start" id="start-mission">Start</button>
+        <button class="danger" id="stop-mission">Stop</button>
+        <button id="reset-robot">Reset</button>
+        <button id="clear-esp-log">Clear ESP Log</button>
+      </section>
+
+      <section class="grid cards">
+        <article class="card">
+          <span>State</span>
+          <strong id="state">-</strong>
+        </article>
+        <article class="card">
+          <span>Mission Time</span>
+          <strong id="time">-</strong>
+        </article>
+        <article class="card">
+          <span>Front Marker</span>
+          <strong id="front-marker">-</strong>
+        </article>
+        <article class="card">
+          <span>Rear Marker</span>
+          <strong id="rear-marker">-</strong>
+        </article>
+        <article class="card">
+          <span>Distance</span>
+          <strong id="distance">-</strong>
+        </article>
+        <article class="card">
+          <span>Speed</span>
+          <strong id="speed">-</strong>
+        </article>
+        <article class="card">
+          <span>Left PWM</span>
+          <strong id="left-pwm">-</strong>
+        </article>
+        <article class="card">
+          <span>Right PWM</span>
+          <strong id="right-pwm">-</strong>
+        </article>
+      </section>
+
+      <section class="grid charts">
+        <article class="panel chart-panel">
+          <div class="panel-head">
+            <h2>Markers</h2>
+            <span>front/rear</span>
+          </div>
+          <canvas id="marker-chart" width="720" height="260"></canvas>
+        </article>
+
+        <article class="panel chart-panel">
+          <div class="panel-head">
+            <h2>Ultrasonic</h2>
+            <span>cm</span>
+          </div>
+          <canvas id="distance-chart" width="720" height="260"></canvas>
+        </article>
+
+        <article class="panel chart-panel">
+          <div class="panel-head">
+            <h2>PWM</h2>
+            <span>left/right</span>
+          </div>
+          <canvas id="pwm-chart" width="720" height="260"></canvas>
+        </article>
+
+        <article class="panel chart-panel">
+          <div class="panel-head">
+            <h2>Speed</h2>
+            <span>m/s</span>
+          </div>
+          <canvas id="speed-chart" width="720" height="260"></canvas>
+        </article>
+      </section>
+
+      <section class="grid lower">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Run Logger</h2>
+            <span id="active-run">No active run</span>
+          </div>
+          <p id="last-error" class="error-line"></p>
+          <pre id="raw-status" class="raw">Waiting for data...</pre>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Saved Runs</h2>
+            <button id="refresh-runs">Refresh</button>
+          </div>
+          <div id="runs" class="runs"></div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
