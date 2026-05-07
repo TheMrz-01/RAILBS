@@ -92,6 +92,16 @@ static constexpr float DEFAULT_TUNNEL_DISTANCE_CM = 24.0f;
 static constexpr uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 
 // -----------------------------
+// Logging configuration
+// -----------------------------
+
+// The ESP32 only keeps a recent backup log in RAM.
+// Your laptop/Bun app should poll /status during the mission and save the full log.
+static constexpr uint16_t TELEMETRY_LOG_CAPACITY = 600;
+static constexpr uint16_t EVENT_LOG_CAPACITY = 120;
+static constexpr uint32_t TELEMETRY_LOG_INTERVAL_MS = 100;
+
+// -----------------------------
 // Web UI configuration
 // -----------------------------
 
@@ -147,6 +157,43 @@ Preferences preferences;
 WebServer server(80);
 
 // -----------------------------
+// Telemetry and event logs
+// -----------------------------
+
+struct TelemetrySample {
+  uint32_t timeMs;
+  MissionState state;
+  int16_t frontMarker;
+  int16_t rearMarker;
+  int16_t distanceCm10;
+  int16_t leftPwm;
+  int16_t rightPwm;
+  int16_t speedCmps;
+  bool tunnelDetected;
+  bool tunnelConfirmed;
+};
+
+struct EventSample {
+  uint32_t timeMs;
+  char event[28];
+  char value[24];
+};
+
+TelemetrySample telemetryLog[TELEMETRY_LOG_CAPACITY];
+EventSample eventLog[EVENT_LOG_CAPACITY];
+uint16_t telemetryLogHead = 0;
+uint16_t telemetryLogCount = 0;
+uint16_t eventLogHead = 0;
+uint16_t eventLogCount = 0;
+uint32_t missionStartMs = 0;
+uint32_t lastTelemetryLogMs = 0;
+
+// Signed motor command used for telemetry.
+// Positive means forward, negative means reverse braking, zero means coast.
+int16_t currentLeftPwm = 0;
+int16_t currentRightPwm = 0;
+
+// -----------------------------
 // Interrupt-shared sensor data
 // -----------------------------
 
@@ -182,7 +229,49 @@ static int clampPwm(int value) {
   return value;
 }
 
+static uint32_t relativeTimeMs() {
+  if (missionStartMs == 0) {
+    return millis();
+  }
+  return millis() - missionStartMs;
+}
+
+static void clearLogs() {
+  telemetryLogHead = 0;
+  telemetryLogCount = 0;
+  eventLogHead = 0;
+  eventLogCount = 0;
+  lastTelemetryLogMs = 0;
+}
+
+static void logEvent(const char *event, const char *value = "") {
+  EventSample &sample = eventLog[eventLogHead];
+  sample.timeMs = relativeTimeMs();
+  strlcpy(sample.event, event, sizeof(sample.event));
+  strlcpy(sample.value, value, sizeof(sample.value));
+
+  eventLogHead = (eventLogHead + 1) % EVENT_LOG_CAPACITY;
+  if (eventLogCount < EVENT_LOG_CAPACITY) {
+    eventLogCount++;
+  }
+}
+
+static void logEventValue(const char *event, int32_t value) {
+  char valueText[24];
+  snprintf(valueText, sizeof(valueText), "%ld", static_cast<long>(value));
+  logEvent(event, valueText);
+}
+
+static void logEventFloat(const char *event, float value) {
+  char valueText[24];
+  snprintf(valueText, sizeof(valueText), "%.1f", value);
+  logEvent(event, valueText);
+}
+
 static void enterState(MissionState nextState) {
+  if (missionState != nextState) {
+    logEvent("STATE_CHANGED", stateName(nextState));
+  }
   missionState = nextState;
   stateStartedMs = millis();
 }
@@ -227,12 +316,16 @@ static void writeMotorChannels(int leftForward, int leftReverse, int rightForwar
 static void coastMotors() {
   // Both PWM inputs low usually coasts the BTS7960 output.
   writeMotorChannels(0, 0, 0, 0);
+  currentLeftPwm = 0;
+  currentRightPwm = 0;
 }
 
 static void brakeMotors() {
   // This is a conservative active reverse brake pulse.
   // Test your BTS7960 wiring: some builds may prefer coasting or both-input braking.
   writeMotorChannels(0, config.brakePwm, 0, config.brakePwm);
+  currentLeftPwm = -config.brakePwm;
+  currentRightPwm = -config.brakePwm;
 }
 
 static void driveForward(int pwm) {
@@ -241,6 +334,8 @@ static void driveForward(int pwm) {
   const int leftPwm = clampPwm(pwm - config.trim);
   const int rightPwm = clampPwm(pwm + config.trim);
   writeMotorChannels(leftPwm, 0, rightPwm, 0);
+  currentLeftPwm = leftPwm;
+  currentRightPwm = rightPwm;
 }
 
 static void setupMotors() {
@@ -329,6 +424,93 @@ static bool isTunnelDetected() {
   return lastDistanceCm > 0.0f && lastDistanceCm <= config.tunnelDistanceCm;
 }
 
+static int getFrontMarkerCount();
+
+static int getRearMarkerCount() {
+  noInterrupts();
+  const int count = rearMarkerCount;
+  interrupts();
+  return count;
+}
+
+static int16_t estimateSpeedCmps() {
+  noInterrupts();
+  const uint32_t lastFrontUs = lastFrontMagnetUs;
+  const uint32_t previousFrontUs = previousFrontMagnetUs;
+  interrupts();
+
+  const uint32_t segmentUs = lastFrontUs - previousFrontUs;
+  if (segmentUs == 0) {
+    return 0;
+  }
+
+  // Magnets are 50 cm apart. Speed is only updated when a new marker arrives.
+  return static_cast<int16_t>((50000000UL + (segmentUs / 2)) / segmentUs);
+}
+
+static TelemetrySample makeTelemetrySample() {
+  TelemetrySample sample;
+  sample.timeMs = relativeTimeMs();
+  sample.state = missionState;
+  sample.frontMarker = getFrontMarkerCount();
+  sample.rearMarker = getRearMarkerCount();
+  sample.distanceCm10 = static_cast<int16_t>(constrain(static_cast<int>(lastDistanceCm * 10.0f), 0, 32767));
+  sample.leftPwm = currentLeftPwm;
+  sample.rightPwm = currentRightPwm;
+  sample.speedCmps = estimateSpeedCmps();
+  sample.tunnelDetected = isTunnelDetected();
+  sample.tunnelConfirmed = tunnelConfirmed;
+  return sample;
+}
+
+static void appendTelemetrySample() {
+  telemetryLog[telemetryLogHead] = makeTelemetrySample();
+  telemetryLogHead = (telemetryLogHead + 1) % TELEMETRY_LOG_CAPACITY;
+  if (telemetryLogCount < TELEMETRY_LOG_CAPACITY) {
+    telemetryLogCount++;
+  }
+}
+
+static void updateTelemetryLog() {
+  if (!missionStarted) {
+    return;
+  }
+
+  if (millis() - lastTelemetryLogMs < TELEMETRY_LOG_INTERVAL_MS) {
+    return;
+  }
+
+  lastTelemetryLogMs = millis();
+  appendTelemetrySample();
+}
+
+static void processSensorEvents() {
+  bool frontEvent = false;
+  bool rearEvent = false;
+  int frontCount = 0;
+  int rearCount = 0;
+
+  noInterrupts();
+  if (frontMarkerEvent) {
+    frontEvent = true;
+    frontCount = frontMarkerCount;
+    frontMarkerEvent = false;
+  }
+  if (rearMarkerEvent) {
+    rearEvent = true;
+    rearCount = rearMarkerCount;
+    rearMarkerEvent = false;
+  }
+  interrupts();
+
+  if (frontEvent) {
+    logEventValue("FRONT_MARKER", frontCount);
+  }
+  if (rearEvent) {
+    logEventValue("REAR_MARKER", rearCount);
+  }
+}
+
 // -----------------------------
 // Mission control
 // -----------------------------
@@ -356,14 +538,25 @@ static void resetMissionCounters() {
 
 static void startMission() {
   resetMissionCounters();
+  clearLogs();
+  missionStartMs = millis();
   missionStarted = true;
+  logEvent("RUN_START", "0");
   enterState(MissionState::Cruise);
+  appendTelemetrySample();
+  lastTelemetryLogMs = millis();
 }
 
 static void stopMission(MissionState stopState) {
-  missionStarted = false;
   brakeMotors();
   enterState(stopState);
+  if (stopState == MissionState::Finished) {
+    logEventValue("RUN_END", getFrontMarkerCount());
+  } else if (stopState == MissionState::EmergencyStop) {
+    logEventValue("EMERGENCY_STOP", getFrontMarkerCount());
+  }
+  appendTelemetrySample();
+  missionStarted = false;
 }
 
 static void updateMission() {
@@ -387,8 +580,9 @@ static void updateMission() {
       driveForward(config.approachPwm);
 
       // The HC-SR04 confirmation prevents stopping at marker 19 if the marker count is wrong.
-      if (isTunnelDetected()) {
+      if (isTunnelDetected() && !tunnelConfirmed) {
         tunnelConfirmed = true;
+        logEventFloat("TUNNEL_CONFIRMED", lastDistanceCm);
       }
 
       // Third strategy: marker 19 is the main stop trigger.
@@ -396,11 +590,13 @@ static void updateMission() {
       if (marker >= TUNNEL_STOP_MARKER && tunnelConfirmed) {
         brakeMotors();
         enterState(MissionState::TunnelStop);
+        logEventValue("TUNNEL_STOP_BEGIN", marker);
       }
 
       // Safety fallback: if marker 20 arrives without confirmation, do not stop outside the tunnel.
       // Continue the mission, but this means the tunnel sensor threshold or wiring needs tuning.
       if (marker >= TUNNEL_EXIT_MARKER && !tunnelConfirmed) {
+        logEventValue("TUNNEL_MISSED", marker);
         enterState(MissionState::AfterTunnel);
       }
       break;
@@ -414,6 +610,7 @@ static void updateMission() {
       }
 
       if (millis() - stateStartedMs >= config.tunnelStopMs) {
+        logEventValue("TUNNEL_STOP_END", millis() - stateStartedMs);
         enterState(MissionState::AfterTunnel);
       }
       break;
@@ -422,6 +619,7 @@ static void updateMission() {
       driveForward(config.cruisePwm);
 
       if (marker >= FINISH_APPROACH_MARKER) {
+        logEventValue("FINISH_APPROACH_BEGIN", marker);
         enterState(MissionState::FinishApproach);
       }
       break;
@@ -486,36 +684,113 @@ static void handleRoot() {
   server.send(200, "text/html", htmlPage());
 }
 
-static void handleStatus() {
-  noInterrupts();
-  const int frontCount = frontMarkerCount;
-  const int rearCount = rearMarkerCount;
-  const uint32_t lastFrontUs = lastFrontMagnetUs;
-  const uint32_t previousFrontUs = previousFrontMagnetUs;
-  interrupts();
+static void sendCorsHeaders() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
 
-  const uint32_t segmentUs = lastFrontUs - previousFrontUs;
-  const float segmentSeconds = segmentUs > 0 ? segmentUs / 1000000.0f : 0.0f;
-  const float estimatedSpeedMps = segmentSeconds > 0.0f ? 0.5f / segmentSeconds : 0.0f;
+static void handleStatus() {
+  const TelemetrySample sample = makeTelemetrySample();
 
   String status;
-  status.reserve(1200);
-  status += "state: "; status += stateName(missionState); status += '\n';
-  status += "frontMarkerCount: "; status += frontCount; status += '\n';
-  status += "rearMarkerCount: "; status += rearCount; status += '\n';
-  status += "lastDistanceCm: "; status += String(lastDistanceCm, 1); status += '\n';
-  status += "tunnelDetected: "; status += isTunnelDetected() ? "yes" : "no"; status += '\n';
-  status += "tunnelConfirmed: "; status += tunnelConfirmed ? "yes" : "no"; status += '\n';
-  status += "segmentSeconds: "; status += String(segmentSeconds, 3); status += '\n';
-  status += "estimatedSpeedMps: "; status += String(estimatedSpeedMps, 2); status += '\n';
-  status += "cruisePwm: "; status += config.cruisePwm; status += '\n';
-  status += "approachPwm: "; status += config.approachPwm; status += '\n';
-  status += "finishPwm: "; status += config.finishPwm; status += '\n';
-  status += "tunnelStopMs: "; status += config.tunnelStopMs; status += '\n';
-  status += "tunnelDistanceCm: "; status += String(config.tunnelDistanceCm, 1); status += '\n';
-  status += "ip: "; status += WiFi.softAPIP().toString(); status += '\n';
+  status.reserve(700);
+  status += '{';
+  status += "\"timeMs\":"; status += sample.timeMs; status += ',';
+  status += "\"state\":\""; status += stateName(sample.state); status += "\",";
+  status += "\"frontMarker\":"; status += sample.frontMarker; status += ',';
+  status += "\"rearMarker\":"; status += sample.rearMarker; status += ',';
+  status += "\"distanceCm\":"; status += String(sample.distanceCm10 / 10.0f, 1); status += ',';
+  status += "\"leftPwm\":"; status += sample.leftPwm; status += ',';
+  status += "\"rightPwm\":"; status += sample.rightPwm; status += ',';
+  status += "\"tunnelDetected\":"; status += sample.tunnelDetected ? "true" : "false"; status += ',';
+  status += "\"tunnelConfirmed\":"; status += sample.tunnelConfirmed ? "true" : "false"; status += ',';
+  status += "\"estimatedSpeedMps\":"; status += String(sample.speedCmps / 100.0f, 2); status += ',';
+  status += "\"missionStarted\":"; status += missionStarted ? "true" : "false"; status += ',';
+  status += "\"telemetryLogCount\":"; status += telemetryLogCount; status += ',';
+  status += "\"eventLogCount\":"; status += eventLogCount; status += ',';
+  status += "\"ip\":\""; status += WiFi.softAPIP().toString(); status += "\"";
+  status += '}';
 
-  server.send(200, "text/plain", status);
+  sendCorsHeaders();
+  server.send(200, "application/json", status);
+}
+
+static void sendTelemetryCsv(bool download) {
+  sendCorsHeaders();
+  if (download) {
+    server.sendHeader("Content-Disposition", "attachment; filename=telemetry.csv");
+  }
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/csv", "");
+  server.sendContent("timeMs,state,frontMarker,rearMarker,distanceCm,leftPwm,rightPwm,tunnelDetected,tunnelConfirmed,estimatedSpeedMps\n");
+
+  const uint16_t start = (telemetryLogHead + TELEMETRY_LOG_CAPACITY - telemetryLogCount) % TELEMETRY_LOG_CAPACITY;
+  char row[180];
+
+  for (uint16_t i = 0; i < telemetryLogCount; i++) {
+    const TelemetrySample &sample = telemetryLog[(start + i) % TELEMETRY_LOG_CAPACITY];
+    snprintf(row, sizeof(row), "%lu,%s,%d,%d,%.1f,%d,%d,%d,%d,%.2f\n",
+             static_cast<unsigned long>(sample.timeMs),
+             stateName(sample.state),
+             sample.frontMarker,
+             sample.rearMarker,
+             sample.distanceCm10 / 10.0f,
+             sample.leftPwm,
+             sample.rightPwm,
+             sample.tunnelDetected ? 1 : 0,
+             sample.tunnelConfirmed ? 1 : 0,
+             sample.speedCmps / 100.0f);
+    server.sendContent(row);
+  }
+  server.sendContent("");
+}
+
+static void sendEventsCsv(bool download) {
+  sendCorsHeaders();
+  if (download) {
+    server.sendHeader("Content-Disposition", "attachment; filename=events.csv");
+  }
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/csv", "");
+  server.sendContent("timeMs,event,value\n");
+
+  const uint16_t start = (eventLogHead + EVENT_LOG_CAPACITY - eventLogCount) % EVENT_LOG_CAPACITY;
+  char row[100];
+
+  for (uint16_t i = 0; i < eventLogCount; i++) {
+    const EventSample &sample = eventLog[(start + i) % EVENT_LOG_CAPACITY];
+    snprintf(row, sizeof(row), "%lu,%s,%s\n",
+             static_cast<unsigned long>(sample.timeMs),
+             sample.event,
+             sample.value);
+    server.sendContent(row);
+  }
+  server.sendContent("");
+}
+
+static void handleLogRecent() {
+  sendTelemetryCsv(false);
+}
+
+static void handleLogDownload() {
+  sendTelemetryCsv(true);
+}
+
+static void handleEvents() {
+  sendEventsCsv(false);
+}
+
+static void handleClearLog() {
+  clearLogs();
+  logEvent("LOG_CLEARED", "0");
+  sendCorsHeaders();
+  server.send(200, "text/plain", "cleared");
+}
+
+static void handleOptions() {
+  sendCorsHeaders();
+  server.send(204);
 }
 
 static void handleConfig() {
@@ -555,7 +830,17 @@ static void setupWebUi() {
   WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD);
 
   server.on("/", handleRoot);
-  server.on("/status", handleStatus);
+  server.on("/status", HTTP_GET, handleStatus);
+  server.on("/log/recent", HTTP_GET, handleLogRecent);
+  server.on("/log/download", HTTP_GET, handleLogDownload);
+  server.on("/events", HTTP_GET, handleEvents);
+  server.on("/log/clear", HTTP_GET, handleClearLog);
+  server.on("/log/clear", HTTP_POST, handleClearLog);
+  server.on("/status", HTTP_OPTIONS, handleOptions);
+  server.on("/log/recent", HTTP_OPTIONS, handleOptions);
+  server.on("/log/download", HTTP_OPTIONS, handleOptions);
+  server.on("/events", HTTP_OPTIONS, handleOptions);
+  server.on("/log/clear", HTTP_OPTIONS, handleOptions);
   server.on("/config", handleConfig);
   server.on("/start", handleStart);
   server.on("/stop", handleStop);
@@ -587,6 +872,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  processSensorEvents();
 
   // Read ultrasonic periodically instead of every loop.
   // This keeps the web server and motor control responsive.
@@ -608,4 +894,6 @@ void loop() {
     lastControlMs = millis();
     updateMission();
   }
+
+  updateTelemetryLog();
 }
