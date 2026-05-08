@@ -138,6 +138,56 @@ button.danger { background: #5b1020; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.magnet-panel {
+  margin-bottom: 1rem;
+  padding: 1rem;
+}
+
+.magnet-layout {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.magnet-stats {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.magnet-stats div {
+  background: #0d1320;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.9rem;
+}
+
+.magnet-stats span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.magnet-stats strong {
+  font-size: clamp(1.2rem, 2vw, 1.8rem);
+}
+
+.track-progress {
+  background: #0a101b;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  height: 1.4rem;
+  overflow: hidden;
+}
+
+#track-progress-fill {
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  height: 100%;
+  transition: width 180ms ease;
+  width: 0%;
+}
+
 .chart-panel {
   min-width: 0;
   padding: 1rem;
@@ -164,8 +214,28 @@ canvas {
   margin-top: 1rem;
 }
 
-.lower .panel {
+.lower .panel, .settings-panel {
   padding: 1rem;
+}
+
+.settings-panel {
+  margin-top: 1rem;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  margin-bottom: 1rem;
+}
+
+.settings-grid label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.settings-grid input {
+  width: 100%;
 }
 
 .raw {
@@ -215,6 +285,12 @@ a:hover { text-decoration: underline; }
   .controls, .cards, .charts, .lower {
     grid-template-columns: 1fr 1fr;
   }
+  .magnet-stats {
+    grid-template-columns: 1fr;
+  }
+  .settings-grid {
+    grid-template-columns: 1fr 1fr;
+  }
   .controls .wide {
     grid-column: 1 / -1;
   }
@@ -226,6 +302,9 @@ a:hover { text-decoration: underline; }
     flex-direction: column;
   }
   .controls, .cards, .charts, .lower {
+    grid-template-columns: 1fr;
+  }
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 }

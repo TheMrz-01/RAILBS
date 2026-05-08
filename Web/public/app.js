@@ -18,11 +18,34 @@ const fields = {
   speed: $("speed"),
   leftPwm: $("left-pwm"),
   rightPwm: $("right-pwm"),
+  magnetSummary: $("magnet-summary"),
+  magnetCount: $("magnet-count"),
+  magnetPosition: $("magnet-position"),
+  magnetProgressText: $("magnet-progress-text"),
+  trackProgressFill: $("track-progress-fill"),
   activeRun: $("active-run"),
   lastError: $("last-error"),
   rawStatus: $("raw-status"),
   runs: $("runs"),
-  refreshRuns: $("refresh-runs")
+  refreshRuns: $("refresh-runs"),
+  saveRobotConfig: $("save-robot-config"),
+  robotConfig: {
+    cruisePwm: $("cfg-cruisePwm"),
+    approachPwm: $("cfg-approachPwm"),
+    finishPwm: $("cfg-finishPwm"),
+    brakePwm: $("cfg-brakePwm"),
+    trim: $("cfg-trim"),
+    markerSpacingCm: $("cfg-markerSpacingCm"),
+    trackDistanceCm: $("cfg-trackDistanceCm"),
+    tunnelApproachMarker: $("cfg-tunnelApproachMarker"),
+    tunnelStopMarker: $("cfg-tunnelStopMarker"),
+    tunnelExitMarker: $("cfg-tunnelExitMarker"),
+    finishApproachMarker: $("cfg-finishApproachMarker"),
+    finishMarker: $("cfg-finishMarker"),
+    tunnelStopMs: $("cfg-tunnelStopMs"),
+    tunnelDistanceCm: $("cfg-tunnelDistanceCm"),
+    magnetDebounceUs: $("cfg-magnetDebounceUs")
+  }
 };
 
 let latestState = null;
@@ -39,7 +62,7 @@ function formatNumber(value, digits = 1, suffix = "") {
 
 async function api(path, options) {
   const response = await fetch(path, options);
-  if (!response.ok) throw new Error(`${path} returned ${response.status}`);
+  if (!response.ok) throw new Error(`${path} ${response.status} kodu döndürdü`);
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) return response.json();
   return response.text();
@@ -62,18 +85,19 @@ function renderState(state) {
   const status = state.lastStatus;
   fields.esp32Url.value = state.esp32BaseUrl;
   fields.pollMs.value = state.pollMs;
-  fields.togglePolling.textContent = state.polling ? "Pause Polling" : "Resume Polling";
-  fields.connection.textContent = state.connected ? "Connected" : "Disconnected";
+  fields.togglePolling.textContent = state.polling ? "Sorgulamayı Durdur" : "Sorgulamayı Başlat";
+  fields.connection.textContent = state.connected ? "Bağlandı" : "Bağlantı Yok";
   fields.connection.classList.toggle("ok", state.connected);
-  fields.lastError.textContent = state.lastError ? `Last error: ${state.lastError}` : "";
-  fields.activeRun.textContent = state.activeRunId ? `Active: ${state.activeRunId}` : "No active run";
+  fields.lastError.textContent = state.lastError ? `Son hata: ${state.lastError}` : "";
+  fields.activeRun.textContent = state.activeRunId ? `Aktif: ${state.activeRunId}` : "Aktif sürüş yok";
 
   if (!status) {
+    renderMagnetTracking(null, []);
     drawAllCharts([]);
     return;
   }
 
-  fields.state.textContent = status.state;
+  fields.state.textContent = status.stateLabel ?? status.state;
   fields.time.textContent = formatMs(status.timeMs);
   fields.frontMarker.textContent = status.frontMarker;
   fields.rearMarker.textContent = status.rearMarker;
@@ -82,25 +106,85 @@ function renderState(state) {
   fields.leftPwm.textContent = status.leftPwm;
   fields.rightPwm.textContent = status.rightPwm;
   fields.rawStatus.textContent = JSON.stringify(status, null, 2);
+  fillRobotConfig(status);
 
+  renderMagnetTracking(status, state.recentSamples ?? []);
   drawAllCharts(state.recentSamples ?? []);
+}
+
+function renderMagnetTracking(status, samples) {
+  if (!status) {
+    fields.magnetSummary.textContent = "Veri bekleniyor";
+    fields.magnetCount.textContent = "-";
+    fields.magnetPosition.textContent = "-";
+    fields.magnetProgressText.textContent = "-";
+    fields.trackProgressFill.style.width = "0%";
+    drawTrackProgressChart([]);
+    return;
+  }
+
+  const markerSpacingCm = Number(status.markerSpacingCm ?? 50);
+  const trackDistanceCm = Number(status.trackDistanceCm ?? 2000);
+  const currentMarker = Number(status.frontMarker ?? 0);
+  const estimatedPositionCm = currentMarker * markerSpacingCm;
+  const progressPercent = trackDistanceCm > 0 ? Math.min(100, Math.max(0, (estimatedPositionCm / trackDistanceCm) * 100)) : 0;
+  const totalMarkers = markerSpacingCm > 0 ? Math.round(trackDistanceCm / markerSpacingCm) : 0;
+
+  fields.magnetSummary.textContent = `${totalMarkers} markerlık parkurda canlı takip`;
+  fields.magnetCount.textContent = `${currentMarker} / ${totalMarkers}`;
+  fields.magnetPosition.textContent = `${(estimatedPositionCm / 100).toFixed(2)} m`;
+  fields.magnetProgressText.textContent = `%${progressPercent.toFixed(1)}`;
+  fields.trackProgressFill.style.width = `${progressPercent}%`;
+
+  drawTrackProgressChart(samples);
 }
 
 function drawAllCharts(samples) {
   drawChart("marker-chart", samples, [
-    { key: "frontMarker", label: "front", color: "#5eead4" },
-    { key: "rearMarker", label: "rear", color: "#fbbf24" }
+    { key: "frontMarker", label: "ön", color: "#5eead4" },
+    { key: "rearMarker", label: "arka", color: "#fbbf24" }
   ]);
   drawChart("distance-chart", samples.filter((s) => s.distanceCm < 900), [
-    { key: "distanceCm", label: "distance cm", color: "#93c5fd" }
+    { key: "distanceCm", label: "mesafe cm", color: "#93c5fd" }
   ]);
   drawChart("pwm-chart", samples, [
-    { key: "leftPwm", label: "left", color: "#a78bfa" },
-    { key: "rightPwm", label: "right", color: "#fb7185" }
+    { key: "leftPwm", label: "sol", color: "#a78bfa" },
+    { key: "rightPwm", label: "sağ", color: "#fb7185" }
   ]);
   drawChart("speed-chart", samples, [
-    { key: "estimatedSpeedMps", label: "speed", color: "#34d399" }
+    { key: "estimatedSpeedMps", label: "hız", color: "#34d399" }
   ]);
+}
+
+function drawTrackProgressChart(samples) {
+  const mapped = samples.map((sample) => {
+    const markerSpacingCm = Number(sample.markerSpacingCm ?? 50);
+    const trackDistanceCm = Number(sample.trackDistanceCm ?? 2000);
+    const positionCm = Number(sample.frontMarker ?? 0) * markerSpacingCm;
+    const progressPercent = trackDistanceCm > 0 ? Math.min(100, Math.max(0, (positionCm / trackDistanceCm) * 100)) : 0;
+    return { ...sample, markerProgressPercent: progressPercent };
+  });
+
+  drawChart("magnet-progress-chart", mapped, [
+    { key: "markerProgressPercent", label: "parkur %", color: "#fbbf24" }
+  ]);
+}
+
+function fillRobotConfig(status) {
+  for (const [key, input] of Object.entries(fields.robotConfig)) {
+    if (!input || !(key in status)) continue;
+    if (document.activeElement === input) continue;
+    input.value = status[key];
+  }
+}
+
+function collectRobotConfig() {
+  const config = {};
+  for (const [key, input] of Object.entries(fields.robotConfig)) {
+    const value = Number(input.value);
+    if (Number.isFinite(value)) config[key] = value;
+  }
+  return config;
 }
 
 function drawChart(canvasId, samples, series) {
@@ -126,7 +210,7 @@ function drawChart(canvasId, samples, series) {
 
   if (!samples.length) {
     ctx.fillStyle = "#91a0b8";
-    ctx.fillText("Waiting for samples", pad.left, height / 2);
+    ctx.fillText("Veri bekleniyor", pad.left, height / 2);
     return;
   }
 
@@ -188,7 +272,7 @@ async function refreshRuns() {
   fields.runs.innerHTML = "";
 
   if (!runs.length) {
-    fields.runs.textContent = "No saved runs yet.";
+    fields.runs.textContent = "Henüz kayıtlı sürüş yok.";
     return;
   }
 
@@ -198,11 +282,11 @@ async function refreshRuns() {
     const summary = run.summary;
     row.innerHTML = `
       <strong>${run.id}</strong>
-      <span>${summary ? `state ${summary.finalState ?? "?"}, samples ${summary.sampleCount ?? 0}` : "run still open or no summary"}</span>
+      <span>${summary ? `durum ${summary.finalState ?? "?"}, örnek ${summary.sampleCount ?? 0}` : "sürüş açık veya özet yok"}</span>
       <div class="run-links">
-        <a href="/api/runs/${run.id}/telemetry.csv">telemetry.csv</a>
-        <a href="/api/runs/${run.id}/events.csv">events.csv</a>
-        <a href="/api/runs/${run.id}/summary.json">summary.json</a>
+        <a href="/api/runs/${run.id}/telemetry.csv">telemetri.csv</a>
+        <a href="/api/runs/${run.id}/events.csv">olaylar.csv</a>
+        <a href="/api/runs/${run.id}/summary.json">özet.json</a>
       </div>
     `;
     fields.runs.append(row);
@@ -219,6 +303,11 @@ fields.saveConfig.addEventListener("click", async () => {
 
 fields.togglePolling.addEventListener("click", async () => {
   await post("/api/config", { polling: !latestState?.polling });
+  await refreshState();
+});
+
+fields.saveRobotConfig.addEventListener("click", async () => {
+  await post("/api/esp32/config", collectRobotConfig());
   await refreshState();
 });
 

@@ -38,8 +38,8 @@ static constexpr uint8_t LEFT_RPWM_PIN = 25;
 static constexpr uint8_t LEFT_LPWM_PIN = 26;
 
 // BTS7960 driver for right motor.
-static constexpr uint8_t RIGHT_RPWM_PIN = 27;
-static constexpr uint8_t RIGHT_LPWM_PIN = 14;
+static constexpr uint8_t RIGHT_RPWM_PIN = 18;
+static constexpr uint8_t RIGHT_LPWM_PIN = 5;
 
 // KY-024 digital outputs.
 // Front sensor is the primary marker counter.
@@ -48,8 +48,8 @@ static constexpr uint8_t FRONT_MAGNET_PIN = 34;
 static constexpr uint8_t REAR_MAGNET_PIN = 35;
 
 // HC-SR04 ultrasonic sensor.
-static constexpr uint8_t ULTRASONIC_TRIG_PIN = 5;
-static constexpr uint8_t ULTRASONIC_ECHO_PIN = 18;
+static constexpr uint8_t ULTRASONIC_TRIG_PIN = 27;
+static constexpr uint8_t ULTRASONIC_ECHO_PIN = 14;
 
 // Optional physical button to start the mission.
 // Use INPUT_PULLUP, so the button should connect this pin to GND when pressed.
@@ -76,6 +76,8 @@ static constexpr int TUNNEL_STOP_MARKER = 19;
 static constexpr int TUNNEL_EXIT_MARKER = 20;
 static constexpr int FINISH_APPROACH_MARKER = 37;
 static constexpr int FINISH_MARKER = 40;
+static constexpr uint16_t DEFAULT_MARKER_SPACING_CM = 50;
+static constexpr uint16_t DEFAULT_TRACK_DISTANCE_CM = 2000;
 
 // The stop is slightly longer than 5.000 s to avoid undershooting due to timing jitter.
 static constexpr uint32_t DEFAULT_TUNNEL_STOP_MS = 5100;
@@ -105,8 +107,9 @@ static constexpr uint32_t TELEMETRY_LOG_INTERVAL_MS = 100;
 // Web UI configuration
 // -----------------------------
 
-static constexpr char WIFI_AP_SSID[] = "KralVonMobil";
-static constexpr char WIFI_AP_PASSWORD[] = "MustiSuckz";
+// [BEWARE!]
+static constexpr char WIFI_AP_SSID[] = "Zeron-Mobil";
+static constexpr char WIFI_AP_PASSWORD[] = "macka124";
 
 // -----------------------------
 // Mission state machine
@@ -114,6 +117,7 @@ static constexpr char WIFI_AP_PASSWORD[] = "MustiSuckz";
 
 enum class MissionState {
   Idle,
+  TestMode,
   Cruise,
   TunnelApproach,
   TunnelStop,
@@ -126,6 +130,7 @@ enum class MissionState {
 static const char *stateName(MissionState state) {
   switch (state) {
     case MissionState::Idle: return "Idle";
+    case MissionState::TestMode: return "TestMode";
     case MissionState::Cruise: return "Cruise";
     case MissionState::TunnelApproach: return "TunnelApproach";
     case MissionState::TunnelStop: return "TunnelStop";
@@ -135,6 +140,21 @@ static const char *stateName(MissionState state) {
     case MissionState::EmergencyStop: return "EmergencyStop";
   }
   return "Unknown";
+}
+
+static const char *stateNameTr(MissionState state) {
+  switch (state) {
+    case MissionState::Idle: return "Beklemede";
+    case MissionState::TestMode: return "Test Modu";
+    case MissionState::Cruise: return "Seyir";
+    case MissionState::TunnelApproach: return "Tünel Yaklaşma";
+    case MissionState::TunnelStop: return "Tünelde Durma";
+    case MissionState::AfterTunnel: return "Tünel Sonrası";
+    case MissionState::FinishApproach: return "Bitiş Yaklaşma";
+    case MissionState::Finished: return "Bitti";
+    case MissionState::EmergencyStop: return "Acil Durdurma";
+  }
+  return "Bilinmiyor";
 }
 
 // -----------------------------
@@ -147,6 +167,13 @@ struct Config {
   int finishPwm = 75;
   int brakePwm = 180;
   int trim = 0;
+  uint16_t markerSpacingCm = DEFAULT_MARKER_SPACING_CM;
+  uint16_t trackDistanceCm = DEFAULT_TRACK_DISTANCE_CM;
+  int tunnelApproachMarker = TUNNEL_APPROACH_MARKER;
+  int tunnelStopMarker = TUNNEL_STOP_MARKER;
+  int tunnelExitMarker = TUNNEL_EXIT_MARKER;
+  int finishApproachMarker = FINISH_APPROACH_MARKER;
+  int finishMarker = FINISH_MARKER;
   uint32_t tunnelStopMs = DEFAULT_TUNNEL_STOP_MS;
   uint32_t magnetDebounceUs = DEFAULT_MAGNET_DEBOUNCE_US;
   float tunnelDistanceCm = DEFAULT_TUNNEL_DISTANCE_CM;
@@ -283,6 +310,13 @@ static void saveConfig() {
   preferences.putInt("finish", config.finishPwm);
   preferences.putInt("brake", config.brakePwm);
   preferences.putInt("trim", config.trim);
+  preferences.putUShort("markCm", config.markerSpacingCm);
+  preferences.putUShort("trackCm", config.trackDistanceCm);
+  preferences.putInt("tunApp", config.tunnelApproachMarker);
+  preferences.putInt("tunStop", config.tunnelStopMarker);
+  preferences.putInt("tunExit", config.tunnelExitMarker);
+  preferences.putInt("finApp", config.finishApproachMarker);
+  preferences.putInt("finMark", config.finishMarker);
   preferences.putUInt("stopMs", config.tunnelStopMs);
   preferences.putUInt("debounce", config.magnetDebounceUs);
   preferences.putFloat("tunnelCm", config.tunnelDistanceCm);
@@ -296,6 +330,13 @@ static void loadConfig() {
   config.finishPwm = preferences.getInt("finish", config.finishPwm);
   config.brakePwm = preferences.getInt("brake", config.brakePwm);
   config.trim = preferences.getInt("trim", config.trim);
+  config.markerSpacingCm = preferences.getUShort("markCm", config.markerSpacingCm);
+  config.trackDistanceCm = preferences.getUShort("trackCm", config.trackDistanceCm);
+  config.tunnelApproachMarker = preferences.getInt("tunApp", config.tunnelApproachMarker);
+  config.tunnelStopMarker = preferences.getInt("tunStop", config.tunnelStopMarker);
+  config.tunnelExitMarker = preferences.getInt("tunExit", config.tunnelExitMarker);
+  config.finishApproachMarker = preferences.getInt("finApp", config.finishApproachMarker);
+  config.finishMarker = preferences.getInt("finMark", config.finishMarker);
   config.tunnelStopMs = preferences.getUInt("stopMs", config.tunnelStopMs);
   config.magnetDebounceUs = preferences.getUInt("debounce", config.magnetDebounceUs);
   config.tunnelDistanceCm = preferences.getFloat("tunnelCm", config.tunnelDistanceCm);
@@ -336,6 +377,27 @@ static void driveForward(int pwm) {
   writeMotorChannels(leftPwm, 0, rightPwm, 0);
   currentLeftPwm = leftPwm;
   currentRightPwm = rightPwm;
+}
+
+static void driveReverse(int pwm) {
+  const int safePwm = clampPwm(pwm);
+  writeMotorChannels(0, safePwm, 0, safePwm);
+  currentLeftPwm = -safePwm;
+  currentRightPwm = -safePwm;
+}
+
+static void testLeftMotor(int pwm) {
+  const int safePwm = clampPwm(pwm);
+  writeMotorChannels(safePwm, 0, 0, 0);
+  currentLeftPwm = safePwm;
+  currentRightPwm = 0;
+}
+
+static void testRightMotor(int pwm) {
+  const int safePwm = clampPwm(pwm);
+  writeMotorChannels(0, 0, safePwm, 0);
+  currentLeftPwm = 0;
+  currentRightPwm = safePwm;
 }
 
 static void setupMotors() {
@@ -444,8 +506,8 @@ static int16_t estimateSpeedCmps() {
     return 0;
   }
 
-  // Magnets are 50 cm apart. Speed is only updated when a new marker arrives.
-  return static_cast<int16_t>((50000000UL + (segmentUs / 2)) / segmentUs);
+  // Speed is only updated when a new marker arrives.
+  return static_cast<int16_t>(((static_cast<uint32_t>(config.markerSpacingCm) * 1000000UL) + (segmentUs / 2)) / segmentUs);
 }
 
 static TelemetrySample makeTelemetrySample() {
@@ -537,6 +599,9 @@ static void resetMissionCounters() {
 }
 
 static void startMission() {
+  if (missionState == MissionState::TestMode) {
+    coastMotors();
+  }
   resetMissionCounters();
   clearLogs();
   missionStartMs = millis();
@@ -567,11 +632,15 @@ static void updateMission() {
       coastMotors();
       break;
 
+    case MissionState::TestMode:
+      // Test commands are handled by web endpoints. Do not overwrite motor PWM here.
+      break;
+
     case MissionState::Cruise:
       driveForward(config.cruisePwm);
 
       // Slow down early so marker 19 stop is repeatable.
-      if (marker >= TUNNEL_APPROACH_MARKER) {
+      if (marker >= config.tunnelApproachMarker) {
         enterState(MissionState::TunnelApproach);
       }
       break;
@@ -587,7 +656,7 @@ static void updateMission() {
 
       // Third strategy: marker 19 is the main stop trigger.
       // Marker 19 is around 9.5 m, safely inside the 9.12-10.00 m tunnel.
-      if (marker >= TUNNEL_STOP_MARKER && tunnelConfirmed) {
+      if (marker >= config.tunnelStopMarker && tunnelConfirmed) {
         brakeMotors();
         enterState(MissionState::TunnelStop);
         logEventValue("TUNNEL_STOP_BEGIN", marker);
@@ -595,7 +664,7 @@ static void updateMission() {
 
       // Safety fallback: if marker 20 arrives without confirmation, do not stop outside the tunnel.
       // Continue the mission, but this means the tunnel sensor threshold or wiring needs tuning.
-      if (marker >= TUNNEL_EXIT_MARKER && !tunnelConfirmed) {
+      if (marker >= config.tunnelExitMarker && !tunnelConfirmed) {
         logEventValue("TUNNEL_MISSED", marker);
         enterState(MissionState::AfterTunnel);
       }
@@ -618,7 +687,7 @@ static void updateMission() {
     case MissionState::AfterTunnel:
       driveForward(config.cruisePwm);
 
-      if (marker >= FINISH_APPROACH_MARKER) {
+      if (marker >= config.finishApproachMarker) {
         logEventValue("FINISH_APPROACH_BEGIN", marker);
         enterState(MissionState::FinishApproach);
       }
@@ -629,7 +698,7 @@ static void updateMission() {
 
       // Stop at the finish marker. This should be tuned with sensor placement.
       // If the front sensor is ahead of the vehicle center, you may need a small delay before braking.
-      if (marker >= FINISH_MARKER) {
+      if (marker >= config.finishMarker) {
         stopMission(MissionState::Finished);
       }
       break;
@@ -650,32 +719,51 @@ static void updateMission() {
 
 static String htmlPage() {
   String page;
-  page.reserve(5000);
+  page.reserve(9800);
 
   page += F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
-  page += F("<title>KRAL VON 4EVER</title><style>");
-  page += F("body{font-family:system-ui;margin:20px;background:#10131a;color:#eef}button,input{font-size:16px;margin:4px;padding:8px}input{width:90px}.card{background:#1b2030;padding:14px;border-radius:12px;margin:12px 0}.danger{background:#b00020;color:white}.ok{background:#1f8f4d;color:white}</style>");
-  page += F("</head><body><h1>Kral Von Mobil Control</h1>");
+  page += F("<title>Kral Von Mobil Paneli</title><style>");
+  page += F("body{font-family:system-ui;margin:20px;background:#10131a;color:#eef}button,input{font-size:16px;margin:4px;padding:8px}input{width:90px}.card{background:#1b2030;padding:14px;border-radius:12px;margin:12px 0}.danger{background:#b00020;color:white}.ok{background:#1f8f4d;color:white}.warn{background:#9a5a00;color:white}.test{background:#203453;border:1px solid #344869;padding:10px;border-radius:10px;margin-top:8px}</style>");
+  page += F("</head><body><h1>Kral Von Mobil Kontrol Paneli</h1>");
 
-  page += F("<div class='card'><button class='ok' onclick=\"fetch('/start')\">Start Mission</button>");
-  page += F("<button class='danger' onclick=\"fetch('/stop')\">Emergency Stop</button>");
-  page += F("<button onclick=\"fetch('/reset')\">Reset Counters</button></div>");
+  page += F("<div class='card'><button class='ok' onclick=\"fetch('/start')\">Görevi Başlat</button>");
+  page += F("<button class='danger' onclick=\"fetch('/stop')\">Acil Durdur</button>");
+  page += F("<button onclick=\"fetch('/reset')\">Sayaçları Sıfırla</button></div>");
 
-  page += F("<div class='card'><h2>Status</h2><pre id='status'>Loading...</pre></div>");
+  page += F("<div class='card'><h2>Test Modu</h2>");
+  page += F("<p>Bunu yalnızca araç kaldırılmış veya sabitlenmişken kullan. Test modu, otonom döngünün manuel motor komutlarını ezmesini engeller.</p>");
+  page += F("<div class='test'>PWM <input id='testPwm' type='number' min='0' max='255' value='80'>");
+  page += F("<button class='warn' onclick=\"fetch('/test/enter')\">Test Moduna Gir</button>");
+  page += F("<button onclick=\"fetch('/test/exit')\">Test Modundan Çık</button><br>");
+  page += F("<button onclick=\"testCmd('forward')\">İleri</button>");
+  page += F("<button onclick=\"testCmd('reverse')\">Geri</button>");
+  page += F("<button onclick=\"testCmd('left')\">Sol Motor</button>");
+  page += F("<button onclick=\"testCmd('right')\">Sağ Motor</button>");
+  page += F("<button class='danger' onclick=\"fetch('/test/brake')\">Frenle</button>");
+  page += F("<button onclick=\"fetch('/test/coast')\">Boşa Al</button></div></div>");
 
-  page += F("<div class='card'><h2>Tuning</h2>");
+  page += F("<div class='card'><h2>Durum</h2><pre id='status'>Yükleniyor...</pre></div>");
+
+  page += F("<div class='card'><h2>Ayarlar</h2>");
   page += F("<form action='/config' method='get'>");
-  page += F("Cruise PWM <input name='cruise' value='"); page += config.cruisePwm; page += F("'><br>");
-  page += F("Approach PWM <input name='approach' value='"); page += config.approachPwm; page += F("'><br>");
-  page += F("Finish PWM <input name='finish' value='"); page += config.finishPwm; page += F("'><br>");
-  page += F("Brake PWM <input name='brake' value='"); page += config.brakePwm; page += F("'><br>");
+  page += F("Seyir PWM <input name='cruise' value='"); page += config.cruisePwm; page += F("'><br>");
+  page += F("Yaklaşma PWM <input name='approach' value='"); page += config.approachPwm; page += F("'><br>");
+  page += F("Bitiş PWM <input name='finish' value='"); page += config.finishPwm; page += F("'><br>");
+  page += F("Fren PWM <input name='brake' value='"); page += config.brakePwm; page += F("'><br>");
   page += F("Motor Trim <input name='trim' value='"); page += config.trim; page += F("'><br>");
-  page += F("Tunnel Stop ms <input name='stopMs' value='"); page += config.tunnelStopMs; page += F("'><br>");
-  page += F("Tunnel Distance cm <input name='tunnelCm' value='"); page += config.tunnelDistanceCm; page += F("'><br>");
-  page += F("Debounce us <input name='debounce' value='"); page += config.magnetDebounceUs; page += F("'><br>");
-  page += F("<button type='submit'>Save</button></form></div>");
+  page += F("Marker Aralığı cm <input name='markerSpacingCm' value='"); page += config.markerSpacingCm; page += F("'><br>");
+  page += F("Parkur Mesafesi cm <input name='trackDistanceCm' value='"); page += config.trackDistanceCm; page += F("'><br>");
+  page += F("Tünel Yaklaşma Markerı <input name='tunnelApproachMarker' value='"); page += config.tunnelApproachMarker; page += F("'><br>");
+  page += F("Tünelde Durma Markerı <input name='tunnelStopMarker' value='"); page += config.tunnelStopMarker; page += F("'><br>");
+  page += F("Tünel Çıkış Markerı <input name='tunnelExitMarker' value='"); page += config.tunnelExitMarker; page += F("'><br>");
+  page += F("Bitiş Yaklaşma Markerı <input name='finishApproachMarker' value='"); page += config.finishApproachMarker; page += F("'><br>");
+  page += F("Bitiş Markerı <input name='finishMarker' value='"); page += config.finishMarker; page += F("'><br>");
+  page += F("Tünel Durma ms <input name='stopMs' value='"); page += config.tunnelStopMs; page += F("'><br>");
+  page += F("Tünel Mesafe Eşiği cm <input name='tunnelCm' value='"); page += config.tunnelDistanceCm; page += F("'><br>");
+  page += F("Manyetik Debounce us <input name='debounce' value='"); page += config.magnetDebounceUs; page += F("'><br>");
+  page += F("<button type='submit'>Kaydet</button></form></div>");
 
-  page += F("<script>async function tick(){let r=await fetch('/status');document.getElementById('status').textContent=await r.text()}setInterval(tick,500);tick();</script>");
+  page += F("<script>function testCmd(cmd){let p=document.getElementById('testPwm').value;fetch('/test/'+cmd+'?pwm='+p)}async function tick(){let r=await fetch('/status');document.getElementById('status').textContent=await r.text()}setInterval(tick,500);tick();</script>");
   page += F("</body></html>");
   return page;
 }
@@ -694,10 +782,11 @@ static void handleStatus() {
   const TelemetrySample sample = makeTelemetrySample();
 
   String status;
-  status.reserve(700);
+  status.reserve(1150);
   status += '{';
   status += "\"timeMs\":"; status += sample.timeMs; status += ',';
   status += "\"state\":\""; status += stateName(sample.state); status += "\",";
+  status += "\"stateLabel\":\""; status += stateNameTr(sample.state); status += "\",";
   status += "\"frontMarker\":"; status += sample.frontMarker; status += ',';
   status += "\"rearMarker\":"; status += sample.rearMarker; status += ',';
   status += "\"distanceCm\":"; status += String(sample.distanceCm10 / 10.0f, 1); status += ',';
@@ -709,6 +798,21 @@ static void handleStatus() {
   status += "\"missionStarted\":"; status += missionStarted ? "true" : "false"; status += ',';
   status += "\"telemetryLogCount\":"; status += telemetryLogCount; status += ',';
   status += "\"eventLogCount\":"; status += eventLogCount; status += ',';
+  status += "\"markerSpacingCm\":"; status += config.markerSpacingCm; status += ',';
+  status += "\"trackDistanceCm\":"; status += config.trackDistanceCm; status += ',';
+  status += "\"tunnelApproachMarker\":"; status += config.tunnelApproachMarker; status += ',';
+  status += "\"tunnelStopMarker\":"; status += config.tunnelStopMarker; status += ',';
+  status += "\"tunnelExitMarker\":"; status += config.tunnelExitMarker; status += ',';
+  status += "\"finishApproachMarker\":"; status += config.finishApproachMarker; status += ',';
+  status += "\"finishMarker\":"; status += config.finishMarker; status += ',';
+  status += "\"cruisePwm\":"; status += config.cruisePwm; status += ',';
+  status += "\"approachPwm\":"; status += config.approachPwm; status += ',';
+  status += "\"finishPwm\":"; status += config.finishPwm; status += ',';
+  status += "\"brakePwm\":"; status += config.brakePwm; status += ',';
+  status += "\"trim\":"; status += config.trim; status += ',';
+  status += "\"tunnelStopMs\":"; status += config.tunnelStopMs; status += ',';
+  status += "\"tunnelDistanceCm\":"; status += String(config.tunnelDistanceCm, 1); status += ',';
+  status += "\"magnetDebounceUs\":"; status += config.magnetDebounceUs; status += ',';
   status += "\"ip\":\""; status += WiFi.softAPIP().toString(); status += "\"";
   status += '}';
 
@@ -785,7 +889,99 @@ static void handleClearLog() {
   clearLogs();
   logEvent("LOG_CLEARED", "0");
   sendCorsHeaders();
-  server.send(200, "text/plain", "cleared");
+  server.send(200, "text/plain", "temizlendi");
+}
+
+static int testPwmFromRequest() {
+  if (!server.hasArg("pwm")) {
+    return 80;
+  }
+  return clampPwm(server.arg("pwm").toInt());
+}
+
+static bool requireTestMode() {
+  if (missionState == MissionState::TestMode) {
+    return true;
+  }
+
+  sendCorsHeaders();
+  server.send(409, "text/plain", "once test moduna gir");
+  return false;
+}
+
+static void handleTestEnter() {
+  if (missionStarted) {
+    sendCorsHeaders();
+    server.send(409, "text/plain", "test modundan once gorevi durdur");
+    return;
+  }
+
+  missionStarted = false;
+  coastMotors();
+  enterState(MissionState::TestMode);
+  logEvent("TEST_MODE_ENTER", "0");
+  sendCorsHeaders();
+  server.send(200, "text/plain", "test moduna girildi");
+}
+
+static void handleTestExit() {
+  coastMotors();
+  enterState(MissionState::Idle);
+  logEvent("TEST_MODE_EXIT", "0");
+  sendCorsHeaders();
+  server.send(200, "text/plain", "test modundan cikildi");
+}
+
+static void handleTestForward() {
+  if (!requireTestMode()) return;
+  const int pwm = testPwmFromRequest();
+  driveForward(pwm);
+  logEventValue("TEST_FORWARD", pwm);
+  sendCorsHeaders();
+  server.send(200, "text/plain", "ileri test");
+}
+
+static void handleTestReverse() {
+  if (!requireTestMode()) return;
+  const int pwm = testPwmFromRequest();
+  driveReverse(pwm);
+  logEventValue("TEST_REVERSE", pwm);
+  sendCorsHeaders();
+  server.send(200, "text/plain", "geri test");
+}
+
+static void handleTestLeft() {
+  if (!requireTestMode()) return;
+  const int pwm = testPwmFromRequest();
+  testLeftMotor(pwm);
+  logEventValue("TEST_LEFT", pwm);
+  sendCorsHeaders();
+  server.send(200, "text/plain", "sol motor test");
+}
+
+static void handleTestRight() {
+  if (!requireTestMode()) return;
+  const int pwm = testPwmFromRequest();
+  testRightMotor(pwm);
+  logEventValue("TEST_RIGHT", pwm);
+  sendCorsHeaders();
+  server.send(200, "text/plain", "sag motor test");
+}
+
+static void handleTestBrake() {
+  if (!requireTestMode()) return;
+  brakeMotors();
+  logEventValue("TEST_BRAKE", config.brakePwm);
+  sendCorsHeaders();
+  server.send(200, "text/plain", "fren testi");
+}
+
+static void handleTestCoast() {
+  if (!requireTestMode()) return;
+  coastMotors();
+  logEvent("TEST_COAST", "0");
+  sendCorsHeaders();
+  server.send(200, "text/plain", "bosa alma testi");
 }
 
 static void handleOptions() {
@@ -799,6 +995,13 @@ static void handleConfig() {
   if (server.hasArg("finish")) config.finishPwm = clampPwm(server.arg("finish").toInt());
   if (server.hasArg("brake")) config.brakePwm = clampPwm(server.arg("brake").toInt());
   if (server.hasArg("trim")) config.trim = constrain(server.arg("trim").toInt(), -80, 80);
+  if (server.hasArg("markerSpacingCm")) config.markerSpacingCm = constrain(server.arg("markerSpacingCm").toInt(), 10, 200);
+  if (server.hasArg("trackDistanceCm")) config.trackDistanceCm = constrain(server.arg("trackDistanceCm").toInt(), 100, 5000);
+  if (server.hasArg("tunnelApproachMarker")) config.tunnelApproachMarker = constrain(server.arg("tunnelApproachMarker").toInt(), 0, 200);
+  if (server.hasArg("tunnelStopMarker")) config.tunnelStopMarker = constrain(server.arg("tunnelStopMarker").toInt(), 0, 200);
+  if (server.hasArg("tunnelExitMarker")) config.tunnelExitMarker = constrain(server.arg("tunnelExitMarker").toInt(), 0, 200);
+  if (server.hasArg("finishApproachMarker")) config.finishApproachMarker = constrain(server.arg("finishApproachMarker").toInt(), 0, 200);
+  if (server.hasArg("finishMarker")) config.finishMarker = constrain(server.arg("finishMarker").toInt(), 0, 200);
   if (server.hasArg("stopMs")) config.tunnelStopMs = constrain(server.arg("stopMs").toInt(), 4500, 6500);
   if (server.hasArg("debounce")) config.magnetDebounceUs = constrain(server.arg("debounce").toInt(), 20000, 400000);
   if (server.hasArg("tunnelCm")) config.tunnelDistanceCm = constrain(server.arg("tunnelCm").toFloat(), 5.0f, 60.0f);
@@ -810,19 +1013,20 @@ static void handleConfig() {
 
 static void handleStart() {
   startMission();
-  server.send(200, "text/plain", "started");
+  server.send(200, "text/plain", "baslatildi");
 }
 
 static void handleStop() {
   stopMission(MissionState::EmergencyStop);
-  server.send(200, "text/plain", "stopped");
+  server.send(200, "text/plain", "durduruldu");
 }
 
 static void handleReset() {
+  missionStarted = false;
   resetMissionCounters();
   enterState(MissionState::Idle);
   coastMotors();
-  server.send(200, "text/plain", "reset");
+  server.send(200, "text/plain", "sifirlandi");
 }
 
 static void setupWebUi() {
@@ -836,11 +1040,27 @@ static void setupWebUi() {
   server.on("/events", HTTP_GET, handleEvents);
   server.on("/log/clear", HTTP_GET, handleClearLog);
   server.on("/log/clear", HTTP_POST, handleClearLog);
+  server.on("/test/enter", HTTP_GET, handleTestEnter);
+  server.on("/test/exit", HTTP_GET, handleTestExit);
+  server.on("/test/forward", HTTP_GET, handleTestForward);
+  server.on("/test/reverse", HTTP_GET, handleTestReverse);
+  server.on("/test/left", HTTP_GET, handleTestLeft);
+  server.on("/test/right", HTTP_GET, handleTestRight);
+  server.on("/test/brake", HTTP_GET, handleTestBrake);
+  server.on("/test/coast", HTTP_GET, handleTestCoast);
   server.on("/status", HTTP_OPTIONS, handleOptions);
   server.on("/log/recent", HTTP_OPTIONS, handleOptions);
   server.on("/log/download", HTTP_OPTIONS, handleOptions);
   server.on("/events", HTTP_OPTIONS, handleOptions);
   server.on("/log/clear", HTTP_OPTIONS, handleOptions);
+  server.on("/test/enter", HTTP_OPTIONS, handleOptions);
+  server.on("/test/exit", HTTP_OPTIONS, handleOptions);
+  server.on("/test/forward", HTTP_OPTIONS, handleOptions);
+  server.on("/test/reverse", HTTP_OPTIONS, handleOptions);
+  server.on("/test/left", HTTP_OPTIONS, handleOptions);
+  server.on("/test/right", HTTP_OPTIONS, handleOptions);
+  server.on("/test/brake", HTTP_OPTIONS, handleOptions);
+  server.on("/test/coast", HTTP_OPTIONS, handleOptions);
   server.on("/config", handleConfig);
   server.on("/start", handleStart);
   server.on("/stop", handleStop);

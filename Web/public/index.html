@@ -1,86 +1,113 @@
 <!doctype html>
-<html lang="en">
+<html lang="tr">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RailBot Dashboard</title>
+    <title>Raylı Araç Paneli</title>
     <link rel="stylesheet" href="/style.css">
   </head>
   <body>
     <header class="hero">
       <div>
-        <p class="eyebrow">ESP32 Rail Vehicle</p>
-        <h1>Mission Dashboard</h1>
-        <p class="subtle">Live polling, local logging, CSV downloads, and quick control for testing.</p>
+        <p class="eyebrow">ESP32 Raylı Araç</p>
+        <h1>Görev Paneli</h1>
+        <p class="subtle">Canlı veri okuma, yerel kayıt, CSV indirme ve test için hızlı kontrol.</p>
       </div>
-      <div class="status-pill" id="connection-pill">Disconnected</div>
+      <div class="status-pill" id="connection-pill">Bağlantı Yok</div>
     </header>
 
     <main>
       <section class="panel controls">
         <div class="field wide">
-          <label for="esp32-url">ESP32 URL</label>
+          <label for="esp32-url">ESP32 Adresi</label>
           <input id="esp32-url" value="http://192.168.4.1" spellcheck="false">
         </div>
         <div class="field">
-          <label for="poll-ms">Poll ms</label>
+          <label for="poll-ms">Sorgu Aralığı ms</label>
           <input id="poll-ms" type="number" min="50" max="2000" step="50" value="100">
         </div>
-        <button id="save-config">Save</button>
-        <button id="toggle-polling">Pause Polling</button>
-        <button class="start" id="start-mission">Start</button>
-        <button class="danger" id="stop-mission">Stop</button>
-        <button id="reset-robot">Reset</button>
-        <button id="clear-esp-log">Clear ESP Log</button>
+        <button id="save-config">Kaydet</button>
+        <button id="toggle-polling">Sorgulamayı Durdur</button>
+        <button class="start" id="start-mission">Başlat</button>
+        <button class="danger" id="stop-mission">Durdur</button>
+        <button id="reset-robot">Sıfırla</button>
+        <button id="clear-esp-log">ESP Log Temizle</button>
       </section>
 
       <section class="grid cards">
         <article class="card">
-          <span>State</span>
+          <span>Durum</span>
           <strong id="state">-</strong>
         </article>
         <article class="card">
-          <span>Mission Time</span>
+          <span>Görev Süresi</span>
           <strong id="time">-</strong>
         </article>
         <article class="card">
-          <span>Front Marker</span>
+          <span>Ön Marker</span>
           <strong id="front-marker">-</strong>
         </article>
         <article class="card">
-          <span>Rear Marker</span>
+          <span>Arka Marker</span>
           <strong id="rear-marker">-</strong>
         </article>
         <article class="card">
-          <span>Distance</span>
+          <span>Mesafe</span>
           <strong id="distance">-</strong>
         </article>
         <article class="card">
-          <span>Speed</span>
+          <span>Hız</span>
           <strong id="speed">-</strong>
         </article>
         <article class="card">
-          <span>Left PWM</span>
+          <span>Sol PWM</span>
           <strong id="left-pwm">-</strong>
         </article>
         <article class="card">
-          <span>Right PWM</span>
+          <span>Sağ PWM</span>
           <strong id="right-pwm">-</strong>
         </article>
+      </section>
+
+      <section class="panel magnet-panel">
+        <div class="panel-head">
+          <h2>Manyetik Marker Takibi</h2>
+          <span id="magnet-summary">Veri bekleniyor</span>
+        </div>
+        <div class="magnet-layout">
+          <div class="magnet-stats">
+            <div>
+              <span>Geçilen Marker</span>
+              <strong id="magnet-count">-</strong>
+            </div>
+            <div>
+              <span>Tahmini Konum</span>
+              <strong id="magnet-position">-</strong>
+            </div>
+            <div>
+              <span>Parkur İlerlemesi</span>
+              <strong id="magnet-progress-text">-</strong>
+            </div>
+          </div>
+          <div class="track-progress" aria-label="Parkur ilerleme çubuğu">
+            <div id="track-progress-fill"></div>
+          </div>
+        </div>
+        <canvas id="magnet-progress-chart" width="1440" height="220"></canvas>
       </section>
 
       <section class="grid charts">
         <article class="panel chart-panel">
           <div class="panel-head">
-            <h2>Markers</h2>
-            <span>front/rear</span>
+            <h2>Markerlar</h2>
+            <span>ön/arka</span>
           </div>
           <canvas id="marker-chart" width="720" height="260"></canvas>
         </article>
 
         <article class="panel chart-panel">
           <div class="panel-head">
-            <h2>Ultrasonic</h2>
+            <h2>Ultrasonik</h2>
             <span>cm</span>
           </div>
           <canvas id="distance-chart" width="720" height="260"></canvas>
@@ -89,14 +116,14 @@
         <article class="panel chart-panel">
           <div class="panel-head">
             <h2>PWM</h2>
-            <span>left/right</span>
+            <span>sol/sağ</span>
           </div>
           <canvas id="pwm-chart" width="720" height="260"></canvas>
         </article>
 
         <article class="panel chart-panel">
           <div class="panel-head">
-            <h2>Speed</h2>
+            <h2>Hız</h2>
             <span>m/s</span>
           </div>
           <canvas id="speed-chart" width="720" height="260"></canvas>
@@ -106,20 +133,45 @@
       <section class="grid lower">
         <article class="panel">
           <div class="panel-head">
-            <h2>Run Logger</h2>
-            <span id="active-run">No active run</span>
+            <h2>Sürüş Kaydı</h2>
+            <span id="active-run">Aktif sürüş yok</span>
           </div>
           <p id="last-error" class="error-line"></p>
-          <pre id="raw-status" class="raw">Waiting for data...</pre>
+          <pre id="raw-status" class="raw">Veri bekleniyor...</pre>
         </article>
 
         <article class="panel">
           <div class="panel-head">
-            <h2>Saved Runs</h2>
-            <button id="refresh-runs">Refresh</button>
+            <h2>Kaydedilen Sürüşler</h2>
+            <button id="refresh-runs">Yenile</button>
           </div>
           <div id="runs" class="runs"></div>
         </article>
+      </section>
+
+      <section class="panel settings-panel">
+        <div class="panel-head">
+          <h2>Araç Ayarları</h2>
+          <span>ESP32 üzerinde kalıcı olarak kaydedilir</span>
+        </div>
+        <div class="settings-grid">
+          <label>Seyir PWM <input id="cfg-cruisePwm" type="number" min="0" max="255"></label>
+          <label>Yaklaşma PWM <input id="cfg-approachPwm" type="number" min="0" max="255"></label>
+          <label>Bitiş PWM <input id="cfg-finishPwm" type="number" min="0" max="255"></label>
+          <label>Fren PWM <input id="cfg-brakePwm" type="number" min="0" max="255"></label>
+          <label>Motor Trim <input id="cfg-trim" type="number" min="-80" max="80"></label>
+          <label>Marker Aralığı cm <input id="cfg-markerSpacingCm" type="number" min="10" max="200"></label>
+          <label>Parkur Mesafesi cm <input id="cfg-trackDistanceCm" type="number" min="100" max="5000"></label>
+          <label>Tünel Yaklaşma Markerı <input id="cfg-tunnelApproachMarker" type="number" min="0" max="200"></label>
+          <label>Tünelde Durma Markerı <input id="cfg-tunnelStopMarker" type="number" min="0" max="200"></label>
+          <label>Tünel Çıkış Markerı <input id="cfg-tunnelExitMarker" type="number" min="0" max="200"></label>
+          <label>Bitiş Yaklaşma Markerı <input id="cfg-finishApproachMarker" type="number" min="0" max="200"></label>
+          <label>Bitiş Markerı <input id="cfg-finishMarker" type="number" min="0" max="200"></label>
+          <label>Tünel Durma ms <input id="cfg-tunnelStopMs" type="number" min="4500" max="6500"></label>
+          <label>Tünel Mesafe Eşiği cm <input id="cfg-tunnelDistanceCm" type="number" min="5" max="60" step="0.1"></label>
+          <label>Manyetik Debounce us <input id="cfg-magnetDebounceUs" type="number" min="20000" max="400000"></label>
+        </div>
+        <button id="save-robot-config">Araç Ayarlarını Kaydet</button>
       </section>
     </main>
 

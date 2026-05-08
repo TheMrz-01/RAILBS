@@ -5,6 +5,7 @@ import { join, normalize } from "node:path";
 type RobotStatus = {
   timeMs: number;
   state: string;
+  stateLabel?: string;
   frontMarker: number;
   rearMarker: number;
   distanceCm: number;
@@ -16,8 +17,25 @@ type RobotStatus = {
   missionStarted: boolean;
   telemetryLogCount: number;
   eventLogCount: number;
+  markerSpacingCm?: number;
+  trackDistanceCm?: number;
+  tunnelApproachMarker?: number;
+  tunnelStopMarker?: number;
+  tunnelExitMarker?: number;
+  finishApproachMarker?: number;
+  finishMarker?: number;
+  cruisePwm?: number;
+  approachPwm?: number;
+  finishPwm?: number;
+  brakePwm?: number;
+  trim?: number;
+  tunnelStopMs?: number;
+  tunnelDistanceCm?: number;
+  magnetDebounceUs?: number;
   ip: string;
 };
+
+type RobotConfigBody = Record<string, number>;
 
 type AppState = {
   esp32BaseUrl: string;
@@ -88,9 +106,46 @@ function text(data: string, init: ResponseInit = {}) {
 function sanitizeBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, "");
   if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-    throw new Error("ESP32 URL must start with http:// or https://");
+    throw new Error("ESP32 adresi http:// veya https:// ile başlamalı");
   }
   return trimmed;
+}
+
+function configQuery(body: RobotConfigBody) {
+  const allowed = new Set([
+    "cruisePwm",
+    "approachPwm",
+    "finishPwm",
+    "brakePwm",
+    "trim",
+    "markerSpacingCm",
+    "trackDistanceCm",
+    "tunnelApproachMarker",
+    "tunnelStopMarker",
+    "tunnelExitMarker",
+    "finishApproachMarker",
+    "finishMarker",
+    "tunnelStopMs",
+    "tunnelDistanceCm",
+    "magnetDebounceUs"
+  ]);
+
+  const aliases: Record<string, string> = {
+    cruisePwm: "cruise",
+    approachPwm: "approach",
+    finishPwm: "finish",
+    brakePwm: "brake",
+    tunnelStopMs: "stopMs",
+    tunnelDistanceCm: "tunnelCm",
+    magnetDebounceUs: "debounce"
+  };
+
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(body)) {
+    if (!allowed.has(key) || !Number.isFinite(value)) continue;
+    params.set(aliases[key] ?? key, String(value));
+  }
+  return params;
 }
 
 function csvEscape(value: unknown) {
@@ -173,6 +228,23 @@ async function stopRun(reason: string) {
     finalFrontMarker: last?.frontMarker ?? null,
     finalRearMarker: last?.rearMarker ?? null,
     finalTimeMs: last?.timeMs ?? null,
+    robotConfig: last ? {
+      markerSpacingCm: last.markerSpacingCm ?? null,
+      trackDistanceCm: last.trackDistanceCm ?? null,
+      tunnelApproachMarker: last.tunnelApproachMarker ?? null,
+      tunnelStopMarker: last.tunnelStopMarker ?? null,
+      tunnelExitMarker: last.tunnelExitMarker ?? null,
+      finishApproachMarker: last.finishApproachMarker ?? null,
+      finishMarker: last.finishMarker ?? null,
+      cruisePwm: last.cruisePwm ?? null,
+      approachPwm: last.approachPwm ?? null,
+      finishPwm: last.finishPwm ?? null,
+      brakePwm: last.brakePwm ?? null,
+      trim: last.trim ?? null,
+      tunnelStopMs: last.tunnelStopMs ?? null,
+      tunnelDistanceCm: last.tunnelDistanceCm ?? null,
+      magnetDebounceUs: last.magnetDebounceUs ?? null
+    } : null,
     maxEstimatedSpeedMps: maxOf(state.samples, "estimatedSpeedMps"),
     minDistanceCm: minOf(state.samples.filter((s) => s.distanceCm < 900), "distanceCm")
   };
@@ -267,12 +339,17 @@ async function pollOnce() {
   }
 }
 
-setInterval(() => {
-  pollOnce().catch((error) => {
-    state.connected = false;
-    state.lastError = error instanceof Error ? error.message : String(error);
-  });
-}, state.pollMs);
+async function pollLoop() {
+  while (true) {
+    await pollOnce().catch((error) => {
+      state.connected = false;
+      state.lastError = error instanceof Error ? error.message : String(error);
+    });
+    await Bun.sleep(state.pollMs);
+  }
+}
+
+pollLoop();
 
 function safeRunPath(runId: string, file: string) {
   if (!/^run-[A-Za-z0-9_.:-]+$/.test(runId)) return null;
@@ -300,17 +377,17 @@ async function listRuns() {
 
 async function serveStatic(pathname: string) {
   const filePath = pathname === "/" ? join(publicDir, "index.html") : normalize(join(publicDir, pathname));
-  if (!filePath.startsWith(publicDir)) return new Response("Not found", { status: 404 });
+  if (!filePath.startsWith(publicDir)) return new Response("Bulunamadı", { status: 404 });
 
   try {
     const info = await stat(filePath);
-    if (!info.isFile()) return new Response("Not found", { status: 404 });
+    if (!info.isFile()) return new Response("Bulunamadı", { status: 404 });
     const file = Bun.file(filePath);
     return new Response(file, {
       headers: { "cache-control": "no-store" }
     });
   } catch {
-    return new Response("Not found", { status: 404 });
+    return new Response("Bulunamadı", { status: 404 });
   }
 }
 
@@ -336,7 +413,7 @@ const server = Bun.serve({
 
     if (pathname === "/api/config" && request.method === "POST") {
       const body = await request.json().catch(() => null) as { esp32BaseUrl?: string; pollMs?: number; polling?: boolean } | null;
-      if (!body) return json({ error: "Invalid JSON" }, { status: 400 });
+      if (!body) return json({ error: "Geçersiz JSON" }, { status: 400 });
 
       if (typeof body.esp32BaseUrl === "string") {
         try {
@@ -370,6 +447,17 @@ const server = Bun.serve({
       return text(await fetchEsp32Text("/log/clear"));
     }
 
+    if (pathname === "/api/esp32/config" && request.method === "POST") {
+      const body = await request.json().catch(() => null) as RobotConfigBody | null;
+      if (!body) return json({ error: "Geçersiz JSON" }, { status: 400 });
+
+      const params = configQuery(body);
+      if (!params.size) return json({ error: "Kaydedilecek geçerli ayar yok" }, { status: 400 });
+
+      await fetchEsp32Text(`/config?${params.toString()}`);
+      return json({ ok: true });
+    }
+
     if (pathname === "/api/runs") {
       return json(await listRuns());
     }
@@ -378,7 +466,7 @@ const server = Bun.serve({
     if (runFileMatch) {
       const [, runId, file] = runFileMatch;
       const path = safeRunPath(runId, file);
-      if (!path || !existsSync(path)) return new Response("Not found", { status: 404 });
+      if (!path || !existsSync(path)) return new Response("Bulunamadı", { status: 404 });
       const contentType = file.endsWith(".json") ? "application/json; charset=utf-8" : "text/csv; charset=utf-8";
       return new Response(Bun.file(path), {
         headers: {
@@ -392,5 +480,5 @@ const server = Bun.serve({
   }
 });
 
-console.log(`RailBot dashboard: http://localhost:${server.port}`);
-console.log(`ESP32 source: ${state.esp32BaseUrl}`);
+console.log(`Raylı araç paneli: http://localhost:${server.port}`);
+console.log(`ESP32 kaynağı: ${state.esp32BaseUrl}`);

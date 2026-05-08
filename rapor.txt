@@ -1,0 +1,25 @@
+GENEL SÜRÜŞ ALGORİTMASI :
+
+Araç çalıştırıldığında **ESP32**; motor sürücülerini, manyetik sensörleri, ultrasonik mesafe sensörünü, WiFi arayüzünü ve log sistemini başlatır. Başlatma komutu gelene kadar araç **bekleme durumunda** kalır. Komut alındığında sayaçlar ve kayıtlar sıfırlanır, ardından araç görev sürüşüne başlar.
+
+Sürüş algoritması temel olarak **durum makinesi** mantığıyla çalışır. Araç önce normal seyir hızında ilerler. Manyetik marker sayısı belirli noktalara ulaştığında farklı sürüş modlarına geçer. Tünel bölgesine yaklaşırken hız düşürülür, tünel içinde durma işlemi gerçekleştirilir, ardından tekrar seyir hızına dönülür. Bitişe yaklaşıldığında araç tekrar yavaşlatılır ve son marker algılandığında frenleme yapılarak görev tamamlanır.
+
+Motorlara verilen PWM değeri yalnızca sabit bir değer olarak kullanılmaz; marker geçiş sürelerinden tahmini hız hesaplanarak **PI/PID benzeri bir düzeltme** uygulanabilir. Böylece **batarya gerilimi, motor sıcaklığı, ray sürtünmesi ve yük değişimi** gibi etkenlere rağmen aracın daha kararlı ilerlemesi hedeflenir.
+
+
+KONUMLANDIRMA ALGORİTMASI :
+
+Araç konumunu encoder veya teker dönüş sayısı ile değil, ray üzerindeki **manyetik markerlar** ile belirler. Yarışma parkurunda her 50 cm’de bir mıknatıslı travers bulunduğu için ön ve arka **KY-024 manyetik sensörleri** konum takibi için kullanılır. Ön sensör ana marker sayacı olarak görev yapar, arka sensör ise doğrulama ve hız tahmini için destekleyici veri sağlar.
+
+Her manyetik marker algılandığında ESP32, **interrupt mekanizması** ile marker sayacını artırır. Yanlış veya tekrarlı algılamaları önlemek için **debounce filtresi** uygulanır. Marker sayısı kullanılarak aracın yaklaşık konumu belirlenir. Örneğin **19. marker yaklaşık 9,5 metre konumuna** denk geldiği için tünel içinde durma noktası olarak seçilmiştir.
+
+Markerlar arası geçiş süresi ölçülerek aracın ortalama hızı tahmin edilebilir. Bu hız bilgisi sürüş kontrolünde kullanılarak PWM değeri artırılıp azaltılır. Böylece araç yalnızca zaman tabanlı ilerlemek yerine, parkurdaki **fiziksel referans noktalarına** göre kendini sürekli günceller.
+
+
+DURDURMA ALGORİTMASI :
+
+Araçta iki farklı kritik durdurma işlemi vardır: **tünel içinde 5 saniye durma** ve **bitiş çizgisinde durma**. Tünel duruşu için yalnızca zaman veya mesafe tahmini kullanılmaz. Araç önce marker sayısına göre tünel bölgesine yaklaştığını anlar, ardından **HC-SR04 ultrasonik sensör** ile tünel varlığını doğrular. Tünel doğrulandıktan sonra **19. marker** algılandığında araç frenleme yaparak durur.
+
+Tünel içinde araç yaklaşık 5 saniye boyunca hareketsiz kalmalıdır. Zamanlama hatalarını önlemek için hedef süre **5,00 saniye yerine yaklaşık 5,10 saniye** olarak belirlenir. İlk anda kısa bir aktif fren uygulanır, ardından motorlar boşa alınarak bekleme süresi tamamlanır. Süre dolduğunda araç otomatik olarak tekrar hareket eder.
+
+Bitiş durdurması için araç **37. marker** civarında yavaşlama moduna geçer. Bu noktadan sonra daha düşük PWM ile ilerleyerek durma hassasiyeti artırılır. **40. marker** algılandığında araç frenleme yapar ve görev tamamlanır. Bu yaklaşımda yüksek hız yalnızca güvenli bölgelerde kullanılır, tünel ve bitiş gibi hassas bölgelerde ise **düşük hız ve kontrollü frenleme** önceliklidir.
